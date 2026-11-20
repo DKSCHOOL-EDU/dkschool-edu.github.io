@@ -1,0 +1,64 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function userRole() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : '';
+    }
+    function isAdmin() {
+      return isSignedIn() && userRole() == 'admin';
+    }
+    function isTeacherOrAdmin() {
+      return isSignedIn() && (userRole() == 'teacher' || userRole() == 'admin');
+    }
+
+    // CHỐNG RÒ RỈ THÔNG TIN CÁ NHÂN: Chỉ chính chủ hoặc Admin mới được đọc hồ sơ người dùng (SĐT, ngày sinh, Facebook, Email, phiên đăng nhập)
+    match /users/{userId} {
+      allow read: if isAdmin() || (isSignedIn() && request.auth.uid == userId);
+      allow create: if isAdmin() || (
+        isSignedIn() && request.auth.uid == userId
+        && (request.resource.data.role == 'student' || request.auth.token.email in ['truongkhanhdkschool@gmail.com', 'myduyendkschool@gmail.com'])
+      );
+      allow update: if isAdmin() || (
+        isSignedIn() && request.auth.uid == userId
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.active == resource.data.active
+      );
+      allow delete: if isAdmin();
+
+      // Tiến độ học cá nhân (Góc ôn lại, lịch sử làm bài, đề đã lưu, bản đồ chuyên đề)
+      match /private/{docId} {
+        allow read, write: if isSignedIn() && request.auth.uid == userId;
+      }
+    }
+
+    // Kho đề thi: Mọi người đọc; Giáo viên & Admin tạo; Admin xóa mọi đề; Giáo viên chỉ xóa đề của chính mình
+    match /exams/{examId} {
+      allow read: if true;
+      allow create: if isTeacherOrAdmin() && request.resource.data.authorId == request.auth.uid;
+      allow update: if isAdmin() || (isTeacherOrAdmin() && resource.data.authorId == request.auth.uid);
+      allow delete: if isAdmin() || (isTeacherOrAdmin() && resource.data.authorId == request.auth.uid);
+    }
+
+    // Diễn đàn chung: Mọi người đọc; người đăng nhập đăng bài/thích/bình luận; GV/Admin ghim bài; Admin hoặc tác giả được sửa/xóa
+    match /forum_posts/{postId} {
+      allow read: if true;
+      allow create: if isSignedIn() && request.resource.data.authorId == request.auth.uid;
+      allow update: if isAdmin()
+        || (isSignedIn() && resource.data.authorId == request.auth.uid)
+        || (isTeacherOrAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pinned', 'likes', 'comments']))
+        || (isSignedIn() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['likes', 'comments']));
+      allow delete: if isAdmin() || (isSignedIn() && resource.data.authorId == request.auth.uid);
+    }
+
+    // Thông báo toàn trường: Mọi người đọc; chỉ Admin được đăng/gỡ
+    match /settings/{docId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}
