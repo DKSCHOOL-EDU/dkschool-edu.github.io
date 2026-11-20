@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://TEN-DU-AN-CUA-BAN.web.app/sitemap.xml
