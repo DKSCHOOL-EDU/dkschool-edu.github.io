@@ -55,6 +55,15 @@ service cloud.firestore {
       allow delete: if isAdmin() || (isSignedIn() && resource.data.authorId == request.auth.uid);
     }
 
+
+    // Bảng điểm & Bài nộp của học sinh: Học sinh tạo & xem bài của mình; Giáo viên & Admin xem toàn bộ điểm và chấm Tự luận
+    match /submissions/{submissionId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if isTeacherOrAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow update: if isTeacherOrAdmin();
+      allow delete: if isAdmin();
+    }
+
     // Thông báo toàn trường: Mọi người đọc; chỉ Admin được đăng/gỡ
     match /settings/{docId} {
       allow read: if true;

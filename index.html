@@ -872,14 +872,22 @@
       // Khi dán đủ thông số Firebase, toàn bộ tài khoản, đề thi & diễn đàn
       // sẽ lưu trên máy chủ Google Cloud Firestore (không mất khi cập nhật web).
       // =========================================================
-      const FIREBASE_CONFIG = {
-        apiKey: '',
-        authDomain: '',
-        projectId: '',
-        storageBucket: '',
-        messagingSenderId: '',
-        appId: ''
-      };
+      const FIREBASE_CONFIG = (() => {
+        const inlineCfg = {
+          apiKey: '',
+          authDomain: '',
+          projectId: '',
+          storageBucket: '',
+          messagingSenderId: '',
+          appId: ''
+        };
+        if (inlineCfg.apiKey && inlineCfg.projectId) return inlineCfg;
+        try {
+          const saved = JSON.parse(localStorage.getItem('dkschool_firebase_cfg_v1') || 'null');
+          if (saved && saved.apiKey && saved.projectId) return { ...inlineCfg, ...saved };
+        } catch (e) {}
+        return inlineCfg;
+      })();
       // Email tài khoản Quản trị viên gốc trên Firebase (tự nhận quyền Admin khi đăng ký/đăng nhập)
       const CLOUD_ADMIN_EMAILS = ['truongkhanhdkschool@gmail.com', 'myduyendkschool@gmail.com'];
 
@@ -1163,6 +1171,16 @@
       // =========================================================
       // 1B. FIREBASE CLOUD SYNC ENGINE (AUTH + FIRESTORE REALTIME)
       // =========================================================
+      async function saveSubmissionToCloud(entry) {
+        if (!entry || !entry.id || !cloud.ready || !cloud.db || !cloud.sdk) return;
+        try {
+          const payload = { ...entry, submittedTs: entry.submittedTs || Date.now() };
+          await cloud.sdk.setDoc(cloud.sdk.doc(cloud.db, 'submissions', String(entry.id)), payload, { merge: true });
+        } catch (e) {
+          console.warn('Firestore submission sync skipped:', e && e.message ? e.message : e);
+        }
+      }
+
       async function initFirebaseCloud() {
         if (!cloud.enabled) return;
         try {
@@ -1198,13 +1216,15 @@
             if (state.view === 'dashboard' || state.view === 'admin') render();
           });
 
-          // Admin-only users collection listener (never subscribe for students to prevent PII leakage)
+          // Admin-only users collection listener + Teacher/Admin real-time student submissions listener
           let unsubAdminUsers = null;
+          let unsubCloudSubmissions = null;
 
           // Auth state observer + Real-time Single-Device Session Guard
           authMod.onAuthStateChanged(cloud.auth, async fbUser => {
             if (cloud.unsubSession) { cloud.unsubSession(); cloud.unsubSession = null; }
             if (unsubAdminUsers) { unsubAdminUsers(); unsubAdminUsers = null; }
+            if (unsubCloudSubmissions) { unsubCloudSubmissions(); unsubCloudSubmissions = null; }
             if (!fbUser) {
               clearSensitiveSessionData();
               updateHeaderUI();
@@ -1255,6 +1275,17 @@
                 unsubAdminUsers = fsMod.onSnapshot(fsMod.collection(cloud.db, 'users'), snap => {
                   state.accounts = snap.docs.map(d => sanitizeSessionUser({ id: d.id, ...d.data() }));
                   if (state.view === 'admin') render();
+                });
+              }
+              if (profile.role === 'admin' || profile.role === 'teacher') {
+                unsubCloudSubmissions = fsMod.onSnapshot(fsMod.collection(cloud.db, 'submissions'), snap => {
+                  const cloudSubs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+                  const byId = new Map();
+                  (state.history || []).forEach(h => { if (h && h.id) byId.set(h.id, h); });
+                  cloudSubs.forEach(c => { if (c && c.id) byId.set(c.id, c); });
+                  state.history = Array.from(byId.values()).sort((a, b) => (b.submittedTs || 0) - (a.submittedTs || 0));
+                  safeSet(STORAGE_KEYS.HISTORY, state.history.slice(0, 200));
+                  if (state.view === 'admin' || state.view === 'teacher') render();
                 });
               }
               if (profile.role === 'student' && profile.grade && state.filters.grade === 'all') {
@@ -3849,8 +3880,10 @@
           userId: state.user ? state.user.id : 'guest',
           userName: state.user ? state.user.name : 'Khách',
           userEmail: state.user ? (state.user.email || '') : '',
+          submittedTs: Date.now(),
           date: new Date().toLocaleString('vi-VN')
         });
+        saveSubmissionToCloud(state.history[0]);
         if (state.user) {
           const acc = state.accounts.find(a => a.id === state.user.id);
           if (acc) {
@@ -5536,6 +5569,7 @@
           sub.scaledScore = tMax > 0 ? (bp.decimals === 0 ? Math.round((finalTotal / tMax) * bp.scaleMax) : Math.round((finalTotal / tMax) * bp.scaleMax * 10) / 10) : 0;
           sub.essayGraded = true;
           sub.hasEssayPending = false;
+          saveSubmissionToCloud(sub);
           if (state.lastResult && state.lastResult.submissionId === sub.id) {
             state.lastResult.totalEarned = sub.totalEarned;
             state.lastResult.score10 = sub.score10;
@@ -5617,7 +5651,10 @@
           <section class="glass-panel rounded-2xl p-5 border border-sky-200/80 dark:border-slate-800 shadow-sm space-y-4">
             <div class="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h2 class="font-bold text-base text-knavy dark:text-white">📊 Bảng điểm học sinh làm bài (${totalSubs} lượt nộp)</h2>
+                <div class="flex flex-wrap items-center gap-2">
+                  <h2 class="font-bold text-base text-knavy dark:text-white">📊 Bảng điểm học sinh làm bài (${totalSubs} lượt nộp)</h2>
+                  <span class="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold ${cloud.ready ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300' : 'bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300'}">${cloud.ready ? '🟢 Đồng bộ Database Firestore' : '🟡 Đang lưu cục bộ (Kết nối Firebase để đồng bộ đa thiết bị)'}</span>
+                </div>
                 <p class="text-xs text-slate-600 dark:text-slate-300 mt-0.5">Giáo viên và Quản trị viên theo dõi điểm số, thời gian làm bài và xuất danh sách điểm học sinh.</p>
               </div>
               <button type="button" class="export-scores-csv-btn px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-sm transition-colors">⬇ Xuất bảng điểm (CSV)</button>
@@ -6023,6 +6060,21 @@
                     </div>
                   </form>
                 </div>
+
+                <div class="pt-4 border-t border-slate-200 dark:border-slate-800 space-y-2.5">
+                  <div class="flex items-center justify-between gap-2">
+                    <h3 class="font-bold text-sm text-slate-900 dark:text-white">Cơ sở dữ liệu (Firebase Firestore)</h3>
+                    <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold ${cloud.ready ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}">${cloud.ready ? '🟢 Đã kết nối' : '🟡 Chưa kết nối'}</span>
+                  </div>
+                  <p class="text-[11px] text-slate-600 dark:text-slate-400">Dán cấu hình JSON của Firebase Web App để lưu điểm thi, tài khoản và đề thi lên Database đám mây (đồng bộ tất cả học sinh, giáo viên trên mọi máy).</p>
+                  <form id="adminFirebaseCfgForm" class="space-y-2">
+                    <textarea id="adminFirebaseCfgInput" rows="3" placeholder='{"apiKey":"...","authDomain":"...","projectId":"...","storageBucket":"...","messagingSenderId":"...","appId":"..."}' class="w-full p-2.5 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-[11px] font-mono outline-none focus:border-sky-500">${FIREBASE_CONFIG.projectId ? esc(JSON.stringify(FIREBASE_CONFIG)) : ''}</textarea>
+                    <div class="flex gap-2">
+                      <button type="submit" class="flex-1 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold">Lưu & Kết nối Database</button>
+                      ${FIREBASE_CONFIG.projectId ? '<button type="button" id="clearFirebaseCfgBtn" class="px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold text-rose-600">Ngắt</button>' : ''}
+                    </div>
+                  </form>
+                </div>
               </section>
 
               <section class="lg:col-span-7 glass-panel rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
@@ -6236,6 +6288,33 @@
           showToast('Đã phát thông báo toàn trường lên Kho đề thi!', 'success');
           renderAdminPanel(root);
         });
+        const fbCfgForm = document.getElementById('adminFirebaseCfgForm');
+        if (fbCfgForm) {
+          fbCfgForm.addEventListener('submit', e => {
+            e.preventDefault();
+            const raw = (document.getElementById('adminFirebaseCfgInput').value || '').trim();
+            try {
+              const parsed = JSON.parse(raw);
+              if (!parsed.apiKey || !parsed.projectId) {
+                showToast('Thiếu apiKey hoặc projectId trong cấu hình Firebase.', 'warn');
+                return;
+              }
+              localStorage.setItem('dkschool_firebase_cfg_v1', JSON.stringify(parsed));
+              showToast('Đã lưu cấu hình Firebase Firestore! Đang tải lại để kết nối...', 'success');
+              setTimeout(() => location.reload(), 900);
+            } catch (err) {
+              showToast('JSON cấu hình Firebase không hợp lệ. Hãy kiểm tra lại dấu ngoặc kép.', 'error');
+            }
+          });
+        }
+        const clearFbBtn = document.getElementById('clearFirebaseCfgBtn');
+        if (clearFbBtn) {
+          clearFbBtn.addEventListener('click', () => {
+            localStorage.removeItem('dkschool_firebase_cfg_v1');
+            showToast('Đã ngắt cấu hình Firebase cục bộ. Đang tải lại...', 'info');
+            setTimeout(() => location.reload(), 700);
+          });
+        }
         const clearAnnBtn = document.getElementById('clearAnnouncementBtn');
         if (clearAnnBtn) {
           clearAnnBtn.addEventListener('click', () => {
