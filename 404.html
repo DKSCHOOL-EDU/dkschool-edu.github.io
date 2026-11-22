@@ -1737,6 +1737,7 @@
         infoTab: 'thpt',
         adminSearch: '',
         adminRoleFilter: 'all',
+        scoreFilter: { search: '', examId: 'all', mode: 'all' },
         filters: {
           grade: 'all', // 'all' | '10' | '11' | '12'
           subject: 'all',
@@ -3847,6 +3848,7 @@
           penaltyRate,
           userId: state.user ? state.user.id : 'guest',
           userName: state.user ? state.user.name : 'Khách',
+          userEmail: state.user ? (state.user.email || '') : '',
           date: new Date().toLocaleString('vi-VN')
         });
         if (state.user) {
@@ -4971,6 +4973,8 @@
             </section>
 
             <!-- Teacher Essay Grading Queue -->
+            ${buildStudentScoresSectionHtml()}
+
             <section class="glass-panel rounded-2xl p-5 border border-amber-200/90 dark:border-slate-800 shadow-sm space-y-4">
               <div class="flex flex-wrap items-center justify-between gap-2">
                 <div>
@@ -5569,11 +5573,207 @@
           return `<div class="max-w-sm"><label class="block text-xs font-semibold mb-1">Đáp số chuẩn:</label><input type="text" id="shortCorrectInput" maxlength="10" placeholder="VD: 12 hoặc 0,47" class="w-full px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 font-mono text-sm font-bold" /></div>`;
         }
         return `<div class="text-xs text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 px-3.5 py-2.5 rounded-xl font-medium leading-relaxed">Phần <strong>Tự luận</strong> sẽ chuyển thẳng vào mục <strong>Chấm bài Tự luận học sinh</strong> để Giáo viên trực tiếp đọc bài, cho điểm và nhận xét. Hãy nhập điểm tối đa ở ô <strong>Điểm câu hỏi *</strong> bên dưới.</div>`;
+        bindStudentScoresSection(root, renderTeacherStudio);
       }
 
       // =========================================================
       // 10. VIEW 5B: ADMIN MANAGEMENT PORTAL
       // =========================================================
+      function buildStudentScoresSectionHtml() {
+        const sf = state.scoreFilter || { search: '', examId: 'all', mode: 'all' };
+        const allHist = Array.isArray(state.history) ? state.history : [];
+        const uniqueExams = [];
+        const seenEx = new Set();
+        allHist.forEach(h => {
+          if (h.examId && !seenEx.has(h.examId)) {
+            seenEx.add(h.examId);
+            uniqueExams.push({ id: h.examId, title: h.title || h.examId });
+          }
+        });
+
+        const getAcc = (h) => state.accounts.find(a => a.id === h.userId || (h.userEmail && a.email && a.email.toLowerCase() === h.userEmail.toLowerCase()));
+        const filtered = allHist.filter(h => {
+          if (sf.examId !== 'all' && h.examId !== sf.examId) return false;
+          if (sf.mode !== 'all' && (h.mode || 'exam') !== sf.mode) return false;
+          if (sf.search && sf.search.trim()) {
+            const q = sf.search.trim().toLowerCase();
+            const acc = getAcc(h);
+            const hay = [h.userName, h.userEmail, acc && acc.name, acc && acc.email, acc && acc.phone, h.title, subjectName(h.subject)].filter(Boolean).join(' ').toLowerCase();
+            if (!hay.includes(q)) return false;
+          }
+          return true;
+        });
+
+        const totalSubs = filtered.length;
+        const uniqueStudents = new Set(filtered.map(h => h.userId || h.userName || 'guest')).size;
+        const avg10 = totalSubs ? (filtered.reduce((s, h) => s + Number(h.score10 ?? 0), 0) / totalSubs).toFixed(2) : '—';
+        const max10 = totalSubs ? Math.max(...filtered.map(h => Number(h.score10 ?? 0))).toFixed(2) : '—';
+        const fmtSec = (sec) => {
+          const n = Math.max(0, Number(sec) || 0);
+          return `${Math.floor(n / 60)}p ${String(n % 60).padStart(2, '0')}s`;
+        };
+
+        return `
+          <section class="glass-panel rounded-2xl p-5 border border-sky-200/80 dark:border-slate-800 shadow-sm space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 class="font-bold text-base text-knavy dark:text-white">📊 Bảng điểm học sinh làm bài (${totalSubs} lượt nộp)</h2>
+                <p class="text-xs text-slate-600 dark:text-slate-300 mt-0.5">Giáo viên và Quản trị viên theo dõi điểm số, thời gian làm bài và xuất danh sách điểm học sinh.</p>
+              </div>
+              <button type="button" class="export-scores-csv-btn px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-sm transition-colors">⬇ Xuất bảng điểm (CSV)</button>
+            </div>
+
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center">
+              <div class="p-3 rounded-xl bg-sky-50/80 dark:bg-slate-800/80 border border-sky-100 dark:border-slate-700">
+                <div class="font-mono text-lg font-extrabold text-sky-700 dark:text-sky-400">${totalSubs}</div>
+                <div class="text-[11px] text-slate-600 dark:text-slate-400 font-semibold">Tổng lượt nộp</div>
+              </div>
+              <div class="p-3 rounded-xl bg-teal-50/80 dark:bg-slate-800/80 border border-teal-100 dark:border-slate-700">
+                <div class="font-mono text-lg font-extrabold text-teal-700 dark:text-teal-400">${uniqueStudents}</div>
+                <div class="text-[11px] text-slate-600 dark:text-slate-400 font-semibold">Học sinh đã thi</div>
+              </div>
+              <div class="p-3 rounded-xl bg-emerald-50/80 dark:bg-slate-800/80 border border-emerald-100 dark:border-slate-700">
+                <div class="font-mono text-lg font-extrabold text-emerald-700 dark:text-emerald-400">${avg10}</div>
+                <div class="text-[11px] text-slate-600 dark:text-slate-400 font-semibold">Điểm trung bình</div>
+              </div>
+              <div class="p-3 rounded-xl bg-amber-50/80 dark:bg-slate-800/80 border border-amber-100 dark:border-slate-700">
+                <div class="font-mono text-lg font-extrabold text-amber-700 dark:text-amber-400">${max10}</div>
+                <div class="text-[11px] text-slate-600 dark:text-slate-400 font-semibold">Điểm cao nhất</div>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-12 gap-2.5">
+              <input type="text" class="score-search-inp sm:col-span-5 px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs outline-none focus:border-sky-500" value="${esc(sf.search || '')}" placeholder="Tìm tên học sinh, email hoặc tên đề..." />
+              <select class="score-exam-sel sm:col-span-4 px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs outline-none focus:border-sky-500">
+                <option value="all" ${sf.examId === 'all' ? 'selected' : ''}>Tất cả đề thi (${uniqueExams.length})</option>
+                ${uniqueExams.map(ex => `<option value="${esc(ex.id)}" ${sf.examId === ex.id ? 'selected' : ''}>${esc(ex.title)}</option>`).join('')}
+              </select>
+              <select class="score-mode-sel sm:col-span-3 px-3 py-2 rounded-xl border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs outline-none focus:border-sky-500">
+                <option value="all" ${sf.mode === 'all' ? 'selected' : ''}>Mọi chế độ</option>
+                <option value="exam" ${sf.mode === 'exam' ? 'selected' : ''}>Thi thật</option>
+                <option value="practice" ${sf.mode === 'practice' ? 'selected' : ''}>Tự luyện</option>
+              </select>
+            </div>
+
+            ${filtered.length === 0 ? `
+              <div class="text-center py-8 px-4 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-dashed border-slate-200 dark:border-slate-700 text-xs text-slate-500 dark:text-slate-400">
+                Chưa có lượt nộp bài nào phù hợp với bộ lọc. Khi học sinh nộp bài, điểm số sẽ tự động hiển thị tại đây.
+              </div>
+            ` : `
+              <div class="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700 max-h-[420px] overflow-y-auto custom-scroll">
+                <table class="w-full text-left border-collapse text-xs">
+                  <thead class="bg-sky-50 dark:bg-slate-800 text-sky-900 dark:text-sky-200 sticky top-0 z-10">
+                    <tr>
+                      <th class="py-2.5 px-3 font-bold">Học sinh</th>
+                      <th class="py-2.5 px-3 font-bold">Đề thi</th>
+                      <th class="py-2.5 px-3 font-bold text-center">Chế độ</th>
+                      <th class="py-2.5 px-3 font-bold text-center">Điểm số</th>
+                      <th class="py-2.5 px-3 font-bold text-center">Thời gian</th>
+                      <th class="py-2.5 px-3 font-bold text-center">Trạng thái</th>
+                      <th class="py-2.5 px-3 font-bold">Ngày nộp</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-200/80 dark:divide-slate-800 bg-white dark:bg-slate-900/50">
+                    ${filtered.map(h => {
+                      const acc = getAcc(h);
+                      const stuName = h.userName || (acc ? acc.name : 'Khách');
+                      const stuEmail = h.userEmail || (acc ? acc.email : '');
+                      const sc10 = Number(h.score10 ?? 0);
+                      const scColor = sc10 >= 8 ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-300' : (sc10 >= 5 ? 'bg-sky-100 text-sky-800 dark:bg-sky-900/50 dark:text-sky-300' : 'bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-300');
+                      const modeBadge = (h.mode || 'exam') === 'exam' ? '<span class="px-2 py-0.5 rounded-full bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-300 font-bold text-[10px]">Thi thật</span>' : '<span class="px-2 py-0.5 rounded-full bg-sky-50 dark:bg-sky-950/60 text-sky-700 dark:text-sky-300 font-bold text-[10px]">Tự luyện</span>';
+                      const statusBadge = (h.hasEssayPending && !h.essayGraded) ? '<span class="px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-bold text-[10px]">Chờ GV chấm</span>' : '<span class="px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-bold text-[10px]">Đã chấm</span>';
+                      const viol = Number(h.violationCount || 0) > 0 ? `<div class="text-[10px] text-rose-600 font-semibold mt-0.5">⚠ ${h.violationCount} cảnh báo</div>` : '';
+                      return `
+                        <tr class="hover:bg-sky-50/40 dark:hover:bg-slate-800/50 transition-colors">
+                          <td class="py-2.5 px-3">
+                            <div class="font-bold text-slate-900 dark:text-white">${esc(stuName)}</div>
+                            ${stuEmail ? `<div class="text-[11px] font-mono text-slate-500 dark:text-slate-400">${esc(stuEmail)}</div>` : ''}
+                          </td>
+                          <td class="py-2.5 px-3 max-w-[240px]">
+                            <div class="font-semibold text-slate-800 dark:text-slate-100 truncate" title="${esc(h.title || '')}">${esc(h.title || 'Bài kiểm tra')}</div>
+                            <div class="text-[10px] text-slate-500">${esc(subjectName(h.subject))} · ${esc(termLabel(h.term))}</div>
+                          </td>
+                          <td class="py-2.5 px-3 text-center whitespace-nowrap">${modeBadge}${viol}</td>
+                          <td class="py-2.5 px-3 text-center whitespace-nowrap">
+                            <span class="inline-block px-2.5 py-0.5 rounded-lg font-mono font-extrabold ${scColor}">${sc10.toFixed(2)} đ</span>
+                            ${h.totalMax ? `<div class="text-[10px] text-slate-500 mt-0.5">${Number(h.totalEarned || 0).toFixed(2)}/${Number(h.totalMax).toFixed(2)}</div>` : ''}
+                          </td>
+                          <td class="py-2.5 px-3 text-center font-mono text-slate-600 dark:text-slate-300 whitespace-nowrap">${fmtSec(h.elapsedSec)}</td>
+                          <td class="py-2.5 px-3 text-center whitespace-nowrap">${statusBadge}</td>
+                          <td class="py-2.5 px-3 text-[11px] text-slate-600 dark:text-slate-300 whitespace-nowrap">${esc(h.date || '')}</td>
+                        </tr>
+                      `;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </div>
+            `}
+          </section>
+        `;
+      }
+
+      function bindStudentScoresSection(root, rerenderFn) {
+        const searchInp = root.querySelector('.score-search-inp');
+        if (searchInp) {
+          searchInp.addEventListener('input', (e) => {
+            state.scoreFilter = { ...(state.scoreFilter || { search: '', examId: 'all', mode: 'all' }), search: e.target.value };
+            rerenderFn(root);
+            const again = root.querySelector('.score-search-inp');
+            if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+          });
+        }
+        const exSel = root.querySelector('.score-exam-sel');
+        if (exSel) {
+          exSel.addEventListener('change', (e) => {
+            state.scoreFilter = { ...(state.scoreFilter || { search: '', examId: 'all', mode: 'all' }), examId: e.target.value };
+            rerenderFn(root);
+          });
+        }
+        const modeSel = root.querySelector('.score-mode-sel');
+        if (modeSel) {
+          modeSel.addEventListener('change', (e) => {
+            state.scoreFilter = { ...(state.scoreFilter || { search: '', examId: 'all', mode: 'all' }), mode: e.target.value };
+            rerenderFn(root);
+          });
+        }
+        const expBtn = root.querySelector('.export-scores-csv-btn');
+        if (expBtn) {
+          expBtn.addEventListener('click', () => {
+            const allHist = Array.isArray(state.history) ? state.history : [];
+            if (!allHist.length) { showToast('Chưa có dữ liệu điểm để xuất.', 'warn'); return; }
+            const rows = [['Hoc sinh', 'Email', 'De thi', 'Mon', 'Che do', 'Diem thang 10', 'Diem tho', 'Diem toi da', 'Thoi gian (giay)', 'Canh bao', 'Trang thai', 'Ngay nop']];
+            allHist.forEach(h => {
+              const acc = state.accounts.find(a => a.id === h.userId);
+              rows.push([
+                h.userName || (acc ? acc.name : 'Khach'),
+                h.userEmail || (acc ? acc.email : ''),
+                h.title || '',
+                subjectName(h.subject),
+                (h.mode || 'exam') === 'exam' ? 'Thi that' : 'Tu luyen',
+                Number(h.score10 ?? 0).toFixed(2),
+                Number(h.totalEarned ?? 0).toFixed(2),
+                Number(h.totalMax ?? 0).toFixed(2),
+                Number(h.elapsedSec ?? 0),
+                Number(h.violationCount ?? 0),
+                (h.hasEssayPending && !h.essayGraded) ? 'Cho GV cham' : 'Da cham',
+                h.date || ''
+              ]);
+            });
+            const csv = '\uFEFF' + rows.map(r => r.map(v => '"' + String(v).replace(/"/g, '""') + '"').join(',')).join('\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'dkschool-bang-diem-hoc-sinh.csv';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+            showToast('Đã tải xuống Bảng điểm học sinh (.csv)!', 'success');
+          });
+        }
+      }
+
       function openAdminAccountModal(accId, adminRoot) {
         if (!canAccessAdmin()) return;
         const acc = state.accounts.find(a => a.id === accId);
@@ -5596,7 +5796,7 @@
         const totalTries = userHist.length;
         const avgScore = totalTries ? (userHist.reduce((s, h) => s + Number(h.score10 ?? h.score ?? 0), 0) / totalTries).toFixed(2) : '—';
         const bestScore = totalTries ? Math.max(...userHist.map(h => Number(h.score10 ?? h.score ?? 0))).toFixed(2) : '—';
-        const latestExam = totalTries ? userHist[0].examTitle : 'Chưa có lượt thi';
+        const latestExam = totalTries ? (userHist[0].title || userHist[0].examTitle || 'Bài thi') : 'Chưa có lượt thi';
 
         const modal = document.createElement('div');
         modal.id = 'adminAccountDetailModal';
@@ -5895,6 +6095,8 @@
               </section>
             </div>
 
+            ${buildStudentScoresSectionHtml()}
+
             <section class="glass-panel rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
               <div class="flex flex-wrap items-center justify-between gap-2">
                 <h2 class="font-bold text-base text-knavy dark:text-white">Quản lý Kho đề thi (${allExams.length} đề)</h2>
@@ -5991,6 +6193,7 @@
             showToast('Đã tải xuống danh sách tài khoản (.csv)!', 'success');
           });
         }
+        bindStudentScoresSection(root, renderAdminPanel);
         const adminSearchEl = document.getElementById('adminSearchAccInput');
         if (adminSearchEl) {
           adminSearchEl.addEventListener('input', e => {
