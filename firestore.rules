@@ -64,6 +64,14 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+
+    // Tài liệu tham khảo các môn: Mọi người đọc; Giáo viên & Admin đăng/sửa/xóa
+    match /materials/{materialId} {
+      allow read: if true;
+      allow create, update: if isTeacherOrAdmin();
+      allow delete: if isAdmin() || (isTeacherOrAdmin() && resource.data.authorId == request.auth.uid);
+    }
+
     // Thông báo toàn trường: Mọi người đọc; chỉ Admin được đăng/gỡ
     match /settings/{docId} {
       allow read: if true;
